@@ -1,0 +1,94 @@
+---
+title: "Cleaning Data EDA"
+output: html_notebook
+---
+
+```{r, include=FALSE}
+library(data.table)
+library(ggplot2)
+
+Sys.setenv(R_CONFIG_ACTIVE = Sys.info()['user'])
+setwd(config::get('wd'))
+
+```
+
+# Introduction
+
+The purpose of this notebook is to front the analysis of sample data, observed from the outflow of a manufacturing site, in order to determine how to qualify product loss. The data were provided by the stakeholders, and are stored in a CSV file in the `Data/` directory. Note that as this analysis is hosted in a public Git repository, both the CSV and accompanying PDF are excluded from the repo itself, as the IP does not belong to the author.
+
+# Provided Data
+
+# User Story, Problem Statement
+
+# Assumptions
+
+# Data Loading
+```{r}
+in.fn <- 'Data/interview_data.csv'
+source('R_Code/01_DataReading.R')
+```
+
+# Data Quality
+
+```{r}
+
+```
+Data comprised of three columns, namely, timestamps, normalised loss measures, and normalised flow measures.
+
+## Timestamp quality
+```{r}
+min(input.df$timestamp)
+max(input.df$timestamp)
+
+table(diff(input.df$timestamp))
+```
+
+First check is to verify how regularly sampled the data are. Of the 494,079 rows, 32 have time differences greater than one minute, with the worst gap of 5,817 minutes - just under 97 hours.
+
+The gaps of six minutes or less may indicate issues in the sampling method, power interruptions etc; interpolation across gaps may be acceptable.
+
+The longer duration gaps of 29 minutes up to and past hours require more checking - are the outages expected and/or explainable, was the site operational during this time or closed etc? Given the sampling period is just under one calendar year, it could be that these gaps coincide with major festivals or holiday periods.
+
+The dates and times at which these occurred:
+```{r}
+# Get something in here assessing what the start and end times of the longer duration gaps were, see if there's a pattern.
+```
+
+## Loss quality
+```{r}
+sum(is.na(input.df$normalised_losses))
+min(input.df$normalised_losses,na.rm=TRUE)
+max(input.df$normalised_losses,na.rm=TRUE)
+mean(input.df$normalised_losses,na.rm=TRUE)
+median(input.df$normalised_losses,na.rm=TRUE)
+```
+
+We are missing 158 observations of loss. The remainder are appropriately scaled between 0 and 1, with measures of central tendency falling close to 0.3. A mean slightly higher than the median suggesting a longer tail towards higher values (i.e., there are definitely some times of higher loss).
+
+### Histogram
+
+## Flow quality
+```{r}
+sum(is.na(input.df$normalised_flow))
+min(input.df$normalised_flow,na.rm=TRUE)
+max(input.df$normalised_flow,na.rm=TRUE)
+mean(input.df$normalised_flow,na.rm=TRUE)
+median(input.df$normalised_flow,na.rm=TRUE)
+```
+
+We are missing 37,210 observations of flow. Whilst this represents 7% of the total rows, due to the loss being measured as a proportion of flow this impact the data available. Possible remedial actions:
+* Imputation. Given that we lacked only 158 measures of loss, the remaining 37,052 flow points cannot be assumed as 0. Depending on the intervals of missing data, and establishing if missing at random of not, we may be able to impute with a linear or otherwise model (particularly if there are distinct patterns or waveforms in the flow data with time), or alternately with a **k**-means approach. It would be nice to have additional, non-target covariates to support this.
+* Alternately, if the problem is determined to be time-invariant (i.e., losses may worsen at any point in cleaning, not due to a certain process), the values may be omitted. Root cause analysis still advised, as data go missing for reasons.
+
+
+# Analysis
+
+```{r}
+hist(log10(input.df$normalised_losses/input.df$normalised_flow))
+hist(input.df$normalised_losses)
+# Big spike of high losses that might be explainable, but clearly outliers = need to be validated.
+hist(input.df$normalised_flow)
+# Flow, on the other hand, looks fairly reasonably distributed.
+
+# There's something in the integral quality to be considered, i.e., the product of loss * flow, as high loss at minimal flow has small absolute value.
+```

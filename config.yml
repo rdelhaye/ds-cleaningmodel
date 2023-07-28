@@ -1,0 +1,5 @@
+rdelh:
+    wd: "D:/rdelh/Documents/R_Projects/ds-cleaningmodel"
+    
+default:
+    wd: "~/"
