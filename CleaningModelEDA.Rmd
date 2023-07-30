@@ -76,19 +76,48 @@ mean(input.df$normalised_flow,na.rm=TRUE)
 median(input.df$normalised_flow,na.rm=TRUE)
 ```
 
-We are missing 37,210 observations of flow. Whilst this represents 7% of the total rows, due to the loss being measured as a proportion of flow this impact the data available. Possible remedial actions:
+We are missing 37,210 observations of flow. Whilst this represents 7% of the total rows, due to the loss being measured as a proportion of flow this impacts the data available more significantly. Possible remedial actions:
 * Imputation. Given that we lacked only 158 measures of loss, the remaining 37,052 flow points cannot be assumed as 0. Depending on the intervals of missing data, and establishing if missing at random of not, we may be able to impute with a linear or otherwise model (particularly if there are distinct patterns or waveforms in the flow data with time), or alternately with a **k**-means approach. It would be nice to have additional, non-target covariates to support this.
 * Alternately, if the problem is determined to be time-invariant (i.e., losses may worsen at any point in cleaning, not due to a certain process), the values may be omitted. Root cause analysis still advised, as data go missing for reasons.
 
 
 # Analysis
 
+## Naive histograms
 ```{r}
-hist(log10(input.df$normalised_losses/input.df$normalised_flow))
+
 hist(input.df$normalised_losses)
 # Big spike of high losses that might be explainable, but clearly outliers = need to be validated.
 hist(input.df$normalised_flow)
 # Flow, on the other hand, looks fairly reasonably distributed.
 
 # There's something in the integral quality to be considered, i.e., the product of loss * flow, as high loss at minimal flow has small absolute value.
+hist(log10(input.df$normalised_losses*input.df$normalised_flow))
 ```
+
+There exists a large quantity of high losses that might be explainable, but clearly, as outliers these need to be validated. Flow looks reasonably distributed.
+
+Given that the end goal of this analysis likely ends up requiring a $ value against a quantity of lost product, and that the quantity of product would be computed from the... product... of loss and flow rate, a histogram of the `log10(loss * flow)` has also been considered. The values comprising this distribution represent units of product lost per time step, where the units and time step come from the dimensional analysis of the flow rate (e.g., if flow is measured in litres per second, that carries through to the product). Two clear populations of product are evident in this histogram.
+
+## Temporal Patterns
+
+For the sake of inferring trends over time, we want to recast the date and timestamps, at various levels, as sin and cosine pairs (to accurately capture cyclic behaviour). 
+```{r}
+
+as.numeric(format((input.df$timestamp),format= "%H"))+as.numeric(format((input.df$timestamp),format= "%M"))/60
+
+# month,
+input.df$month.sin <- sinpi(2*as.numeric(format(input.df$timestamp,format= "%m"))/12)
+input.df$month.cos <- cospi(2*as.numeric(format(input.df$timestamp,format= "%m"))/12)
+
+# Day of week
+input.df$DoW.sin <- sinpi(2*as.numeric(format(input.df$timestamp,format= "%w"))/7)
+input.df$Dow.cos <- cospi(2*as.numeric(format(input.df$timestamp,format= "%w"))/7)
+
+# Time of day (minutes? Decimal hours?)
+input.df$ToD.sin <- sinpi(2*(as.numeric(format((input.df$timestamp),format= "%H"))+as.numeric(format((input.df$timestamp),format= "%M"))/60)/24)
+input.df$ToD.cos <- cospi(2*(as.numeric(format((input.df$timestamp),format= "%H"))+as.numeric(format((input.df$timestamp),format= "%M"))/60)/24)
+```
+
+## Thought: Cleaning processes
+I wonder if we might be able to establish the waveforms that occur as part of a clean-down process, enabling us to compare normalised waveforms across events?
