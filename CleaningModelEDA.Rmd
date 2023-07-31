@@ -30,9 +30,6 @@ source('R_Code/01_DataReading.R')
 
 # Data Quality
 
-```{r}
-
-```
 Data comprised of three columns, namely, timestamps, normalised loss measures, and normalised flow measures.
 
 ## Timestamp quality
@@ -52,6 +49,8 @@ The longer duration gaps of 29 minutes up to and past hours require more checkin
 The dates and times at which these occurred:
 ```{r}
 # Get something in here assessing what the start and end times of the longer duration gaps were, see if there's a pattern.
+input.df[,prev.time := shift(timestamp)][,time.delta := as.numeric(difftime(timestamp,prev.time,units='mins'))]
+input.df[time.delta>20,.(timestamp, normalised_losses,normalised_flow,time.delta)]
 ```
 
 ## Loss quality
@@ -84,6 +83,10 @@ We are missing 37,210 observations of flow. Whilst this represents 7% of the tot
 # Analysis
 
 ## Naive histograms
+
+Histograms of the provided quantities show reasonable distributions, with some long tails towards right, especially for losses.
+
+Due to the integral nature of the situation being considered, where we have a total quantity and a proportion thereof, we are introducing the product of the two provided time series as `quantity`, reflecting the normalised units per unit time lost. 
 ```{r}
 
 hist(input.df$normalised_losses)
@@ -93,6 +96,11 @@ hist(input.df$normalised_flow)
 
 # There's something in the integral quality to be considered, i.e., the product of loss * flow, as high loss at minimal flow has small absolute value.
 hist(log10(input.df$normalised_losses*input.df$normalised_flow))
+input.df$normalised_quantity <- input.df$normalised_losses*input.df$normalised_flow
+input.df$lost_quantity <- input.df$normalised_quantity*input.df$time.delta
+input.df[,loss_group:=fifelse(log10(normalised_quantity)>-3,2,1)]
+table(input.df$loss_group)
+
 ```
 
 There exists a large quantity of high losses that might be explainable, but clearly, as outliers these need to be validated. Flow looks reasonably distributed.
@@ -103,9 +111,6 @@ Given that the end goal of this analysis likely ends up requiring a $ value agai
 
 For the sake of inferring trends over time, we want to recast the date and timestamps, at various levels, as sin and cosine pairs (to accurately capture cyclic behaviour). 
 ```{r}
-
-as.numeric(format((input.df$timestamp),format= "%H"))+as.numeric(format((input.df$timestamp),format= "%M"))/60
-
 # month,
 input.df$month.sin <- sinpi(2*as.numeric(format(input.df$timestamp,format= "%m"))/12)
 input.df$month.cos <- cospi(2*as.numeric(format(input.df$timestamp,format= "%m"))/12)
@@ -117,6 +122,43 @@ input.df$Dow.cos <- cospi(2*as.numeric(format(input.df$timestamp,format= "%w"))/
 # Time of day (minutes? Decimal hours?)
 input.df$ToD.sin <- sinpi(2*(as.numeric(format((input.df$timestamp),format= "%H"))+as.numeric(format((input.df$timestamp),format= "%M"))/60)/24)
 input.df$ToD.cos <- cospi(2*(as.numeric(format((input.df$timestamp),format= "%H"))+as.numeric(format((input.df$timestamp),format= "%M"))/60)/24)
+```
+
+## Radial Heatmaps
+Using the sin/cos terms, we can visualise the cyclic distribution of loss, flow, and their product (quantity hereafter). This is a little fancier than it is useful, sadly. Didn't quite plot how I wanted, but still an interesting exercise. 
+```{r}
+radial.plt.df <- copy(input.df)
+radial.plt.df$theta <- atan2(radial.plt.df$ToD.sin, radial.plt.df$ToD.cos) * (180 / pi)
+radial.plt.df$theta[radial.plt.df$theta < 0] <- radial.plt.df$theta[radial.plt.df$theta < 0] + 360
+
+num_bins <- 50  # Or however many bins you want
+radial.plt.df$theta_bin <- cut(radial.plt.df$theta, breaks = num_bins, labels = FALSE)
+radial.plt.df$loss_bin <- cut(radial.plt.df$normalised_losses, breaks = num_bins, labels = FALSE)
+
+ToD.radial.plt <- ggplot(data = radial.plt.df)+
+  geom_hex(aes(x=theta,y=normalised_losses)) +
+  coord_polar(theta = 'x')+
+  scale_fill_gradient(trans='log1p' )
+ToD.radial.plt
+
+radial.plt.df$theta <- atan2(radial.plt.df$month.sin, radial.plt.df$month.cos) * (180 / pi)
+radial.plt.df$theta_bin <- cut(radial.plt.df$theta, breaks = 12, labels = FALSE)
+
+Month.radial.plt <- ggplot(data = radial.plt.df)+
+  geom_hex(aes(x=theta,y=normalised_losses)) +
+  coord_polar(theta = 'x')+
+  scale_fill_gradient(trans='log1p' )
+Month.radial.plt
+
+radial.plt.df$theta <- atan2(radial.plt.df$DoW.sin, radial.plt.df$Dow.cos) * (180 / pi)
+radial.plt.df$theta_bin <- cut(radial.plt.df$theta, breaks = num_bins, labels = FALSE)
+
+DoW.radial.plt <- ggplot(data = radial.plt.df)+
+  geom_hex(aes(x=theta,y=normalised_losses)) +
+  coord_polar(theta = 'x')+
+  scale_fill_gradient(trans='log1p' )
+DoW.radial.plt
+
 ```
 
 ## Thought: Cleaning processes
