@@ -18,9 +18,29 @@ The purpose of this notebook is to front the analysis of sample data, observed f
 
 # Provided Data
 
+Time series sampled at 60 second intervals of:
+* Outflow rate, normalised. 
+
 # User Story, Problem Statement
 
+As a stakeholder, I need insight into the quantity lost per day, so that I can invoke remedial action the following day and minimise our losses. However, I do not have a clear concept of what "typical" or "poor" losses look like.
+
 # Assumptions
+
+* Given the dimensionless data provided, we must assume the most basic inference that the flow rate is in units per minute.
+* May not be relevant, but, assuming that flow rate is linear, laminar, and appropriately handled before normalisation.
+* There's an explicit assumption that turbidity correlates "directly" with the proportion lost. I would question the implication that 100% turbidity equates 100% product (my suspicion is that the turbidity limit is reached before 100% loss); I am hence going to define a correlation value between 0 and 1 that represents the proportion of product within the flow when turbidity is 100%, to give us a lever for later adjustment if required. 
+
+```{r}
+turbidity.loss.coeff <- 1.0
+```
+
+# Clarifying Questions
+
+For discussion with stakeholders:
+
+* Did something occur in July toat affected the flow sensor?
+* SImilarly, we have dramatically more missing flow data than loss data. I would query why.
 
 # Data Loading
 ```{r}
@@ -49,8 +69,8 @@ The longer duration gaps of 29 minutes up to and past hours require more checkin
 The dates and times at which these occurred:
 ```{r}
 # Get something in here assessing what the start and end times of the longer duration gaps were, see if there's a pattern.
-input.df[,prev.time := shift(timestamp)][,time.delta := as.numeric(difftime(timestamp,prev.time,units='mins'))]
-input.df[time.delta>20,.(timestamp, normalised_losses,normalised_flow,time.delta)]
+input.df[,`:=`(prev.time = shift(timestamp),prev.flow = shift(normalised_flow))][,time.delta := as.numeric(difftime(timestamp,prev.time,units='mins'))]
+input.df[time.delta>20,.(prev.time,timestamp, time.delta,normalised_flow,prev.flow)]
 ```
 
 ## Loss quality
@@ -65,6 +85,13 @@ median(input.df$normalised_losses,na.rm=TRUE)
 We are missing 158 observations of loss. The remainder are appropriately scaled between 0 and 1, with measures of central tendency falling close to 0.3. A mean slightly higher than the median suggesting a longer tail towards higher values (i.e., there are definitely some times of higher loss).
 
 ### Histogram
+```{r}
+hist(input.df$normalised_losses, breaks=20)
+plot(seq(20),log10(hist(input.df$normalised_losses, breaks=20,plot=FALSE)$counts))
+```
+
+As expected, the vast majority of normalised loss values fall around 0.3. However, a disproportionately high 4% of loss values approach 100%, and do not conform to the expected distribution behaviour. Clearly, significant outliers to be evaluated.
+
 
 ## Flow quality
 ```{r}
@@ -98,8 +125,8 @@ hist(input.df$normalised_flow)
 hist(log10(input.df$normalised_losses*input.df$normalised_flow))
 input.df$normalised_quantity <- input.df$normalised_losses*input.df$normalised_flow
 input.df$lost_quantity <- input.df$normalised_quantity*input.df$time.delta
-input.df[,loss_group:=fifelse(log10(normalised_quantity)>-3,2,1)]
-table(input.df$loss_group)
+# input.df[,loss_group:=fifelse(log10(normalised_quantity)>-3,2,1)]
+# table(input.df$loss_group)
 
 ```
 
@@ -111,55 +138,154 @@ Given that the end goal of this analysis likely ends up requiring a $ value agai
 
 For the sake of inferring trends over time, we want to recast the date and timestamps, at various levels, as sin and cosine pairs (to accurately capture cyclic behaviour). 
 ```{r}
+radial.plt.df <- copy(input.df)
 # month,
-input.df$month.sin <- sinpi(2*as.numeric(format(input.df$timestamp,format= "%m"))/12)
-input.df$month.cos <- cospi(2*as.numeric(format(input.df$timestamp,format= "%m"))/12)
+radial.plt.df$month.sin <- sinpi(2*as.numeric(format(radial.plt.df$timestamp,format= "%j"))/365)
+radial.plt.df$month.cos <- cospi(2*as.numeric(format(radial.plt.df$timestamp,format= "%j"))/365)
+
 
 # Day of week
-input.df$DoW.sin <- sinpi(2*as.numeric(format(input.df$timestamp,format= "%w"))/7)
-input.df$Dow.cos <- cospi(2*as.numeric(format(input.df$timestamp,format= "%w"))/7)
+radial.plt.df$DoW.sin <- sinpi(2*(1+as.numeric(format(radial.plt.df$timestamp,format= "%w")))/8)
+radial.plt.df$Dow.cos <- cospi(2*(1+as.numeric(format(radial.plt.df$timestamp,format= "%w")))/8)
 
 # Time of day (minutes? Decimal hours?)
-input.df$ToD.sin <- sinpi(2*(as.numeric(format((input.df$timestamp),format= "%H"))+as.numeric(format((input.df$timestamp),format= "%M"))/60)/24)
-input.df$ToD.cos <- cospi(2*(as.numeric(format((input.df$timestamp),format= "%H"))+as.numeric(format((input.df$timestamp),format= "%M"))/60)/24)
+radial.plt.df$ToD.sin <- sinpi(2*(as.numeric(format((radial.plt.df$timestamp),format= "%H"))+as.numeric(format((radial.plt.df$timestamp),format= "%M"))/60)/24)
+radial.plt.df$ToD.cos <- cospi(2*(as.numeric(format((radial.plt.df$timestamp),format= "%H"))+as.numeric(format((radial.plt.df$timestamp),format= "%M"))/60)/24)
 ```
 
 ## Radial Heatmaps
-Using the sin/cos terms, we can visualise the cyclic distribution of loss, flow, and their product (quantity hereafter). This is a little fancier than it is useful, sadly. Didn't quite plot how I wanted, but still an interesting exercise. 
+Using the sin/cos terms, we can visualise the cyclic distribution of loss, flow, and their product (quantity hereafter). This is a little fancier than it is useful, sadly. Didn't quite plot how I wanted, but still an interesting exercise. To interpret the rose plots, the 0 mark (midnight, Sunday into Monday, start of year etc) is at 12 o'clock, and time progresses clockwise. The radial distance from the origin gives the measure.
+
+### Time of Day behaviour
 ```{r}
-radial.plt.df <- copy(input.df)
-radial.plt.df$theta <- atan2(radial.plt.df$ToD.sin, radial.plt.df$ToD.cos) * (180 / pi)
-radial.plt.df$theta[radial.plt.df$theta < 0] <- radial.plt.df$theta[radial.plt.df$theta < 0] + 360
 
-num_bins <- 50  # Or however many bins you want
-radial.plt.df$theta_bin <- cut(radial.plt.df$theta, breaks = num_bins, labels = FALSE)
-radial.plt.df$loss_bin <- cut(radial.plt.df$normalised_losses, breaks = num_bins, labels = FALSE)
+radial.plt.df$theta.ToD <- atan2(radial.plt.df$ToD.sin, radial.plt.df$ToD.cos) * (180 / pi)
+radial.plt.df$theta.ToD[radial.plt.df$theta.ToD < 0] <- radial.plt.df$theta.ToD[radial.plt.df$theta.ToD < 0] + 360
+# 
+# num_bins <- 50  # Or however many bins you want
+# radial.plt.df$theta_bin <- cut(radial.plt.df$theta, breaks = num_bins, labels = FALSE)
+# radial.plt.df$loss_bin <- cut(radial.plt.df$normalised_losses, breaks = num_bins, labels = FALSE)
+# radial.plt.df$flow_bin <- cut(radial.plt.df$normalised_flow, breaks = num_bins, labels = FALSE)
 
-ToD.radial.plt <- ggplot(data = radial.plt.df)+
-  geom_hex(aes(x=theta,y=normalised_losses)) +
+ToD.radial.plt.F <- ggplot(data = radial.plt.df)+
+  geom_hex(aes(x=theta.ToD,y=normalised_flow)) +
   coord_polar(theta = 'x')+
   scale_fill_gradient(trans='log1p' )
-ToD.radial.plt
+ToD.radial.plt.F
 
-radial.plt.df$theta <- atan2(radial.plt.df$month.sin, radial.plt.df$month.cos) * (180 / pi)
-radial.plt.df$theta_bin <- cut(radial.plt.df$theta, breaks = 12, labels = FALSE)
-
-Month.radial.plt <- ggplot(data = radial.plt.df)+
-  geom_hex(aes(x=theta,y=normalised_losses)) +
+ToD.radial.plt.L <- ggplot(data = radial.plt.df)+
+  geom_hex(aes(x=theta.ToD,y=normalised_losses)) +
   coord_polar(theta = 'x')+
   scale_fill_gradient(trans='log1p' )
-Month.radial.plt
+ToD.radial.plt.L
+```
 
-radial.plt.df$theta <- atan2(radial.plt.df$DoW.sin, radial.plt.df$Dow.cos) * (180 / pi)
-radial.plt.df$theta_bin <- cut(radial.plt.df$theta, breaks = num_bins, labels = FALSE)
+Both flow and loss look fairly steady throughout time of day variation.
 
-DoW.radial.plt <- ggplot(data = radial.plt.df)+
-  geom_hex(aes(x=theta,y=normalised_losses)) +
+### Day of year
+```{r}
+# 
+radial.plt.df$theta.DoY <- atan2(radial.plt.df$month.sin, radial.plt.df$month.cos) * (180 / pi)
+radial.plt.df$theta.DoY[radial.plt.df$theta.DoY < 0] <- radial.plt.df$theta.DoY[radial.plt.df$theta.DoY < 0] + 360
+
+Month.radial.plt.F <- ggplot(data = radial.plt.df)+
+  geom_hex(aes(x=theta.DoY,y=normalised_flow)) +
   coord_polar(theta = 'x')+
   scale_fill_gradient(trans='log1p' )
-DoW.radial.plt
+Month.radial.plt.F
+
+Month.radial.plt.L <- ggplot(data = radial.plt.df)+
+  geom_hex(aes(x=theta.DoY,y=normalised_losses)) +
+  coord_polar(theta = 'x')+
+  scale_fill_gradient(trans='log1p' )
+Month.radial.plt.L
+```
+
+The flow rates with respect to decimal day of year are steady. However, the loss quantities show a strong outlying sector of time that should be examined further. Reverting to a rectilinear histogram:
+```{r}
+radial.plt.df$DoY <- format(radial.plt.df$timestamp,format= "%j")
+radial.plt.df$month <- format(radial.plt.df$timestamp,format= "%m")
+
+DoY.rect.plt.L <- ggplot(data = radial.plt.df)+
+  geom_hex(aes(x=DoY,y=normalised_losses)) +
+  scale_fill_gradient(trans='log1p' )
+DoY.rect.plt.L
+
+hist(unlist(radial.plt.df[as.numeric(month)<10,.(normalised_losses)]),breaks=20)
+hist(unlist(radial.plt.df[as.numeric(month)>10,.(normalised_losses)]),breaks=20)
+```
+
+So, data in November and December have markedly different loss behaviours than other times. Given that the flow data are stable with respect to other time periods, and it is only the loss data that are affected, there may be a source of additional noise, or perhaps a change in systems or workforce. Irrespective of the source, it would be inappropriate to , and we could consider either two models for Nov/Dec-times and not, or a model with appropriate indicator variable handling to model both. Alternately, 
+
+### Day of Week
+
+```{r,eval=FALSE}
+# 
+radial.plt.df$theta.DoW <- atan2(radial.plt.df$DoW.sin, radial.plt.df$Dow.cos) * (180 / pi)
+radial.plt.df$theta.DoW[radial.plt.df$theta.DoW < 0] <- radial.plt.df$theta.DoW[radial.plt.df$theta.DoW < 0] + 360
+# radial.plt.df$theta_bin <- cut(radial.plt.df$theta, breaks = num_bins, labels = FALSE)
+
+DoW.radial.plt.F <- ggplot(data = radial.plt.df)+
+  geom_hex(aes(x=theta.DoW,y=normalised_flow)) +
+  coord_polar(theta = 'x')+
+  scale_fill_gradient(trans='log1p' )
+DoW.radial.plt.F
+
+DoW.radial.plt.L <- ggplot(data = radial.plt.df)+
+  geom_hex(aes(x=theta.DoW,y=normalised_losses)) +
+  coord_polar(theta = 'x')+
+  scale_fill_gradient(trans='log1p' )
+DoW.radial.plt.L
+```
+
+# Flow-Loss Relationship Modelling, ex Nov/Dec
+
+
+As mentioned previously, in order to quantify the amount of product lost, we must consider the product of the flow and loss rates. However, there are several points to consider:
+
+* Non-uniform timesteps (i.e., missing records). Two options, either interpolate across the time gaps with appropriate imputation, or assume that 0 flow occured in the time frame. Imputation would be preferable where the gap is a small number of timesteps, however, the few multiple-day records should not be considered.
+* Nov/Dec loss anomaly. Many options, including omitting the months outright, handling with indicator variables, or a separate model. For the MVP process, we will omit the Nov/Dec data in favour of a general time-invariant solution.
+* Missing loss/flow measurements. Imputation should be sufficient. 
+
+Given the current paucity of features, imputation with K-means is unlikely to be much improvement over linear interpolation, or median imputation. 
+
+```{r}
+
+# ts.plt <- ggplot(head(input.df,n=3000),aes(x=timestamp))+
+#   geom_line(aes(y=normalised_flow,color="flow"))+
+#   geom_line(aes(y=normalised_losses,color="loss"))+
+#   geom_line(aes(y=normalised_quantity,color="quantity"))
+# ts.plt
 
 ```
 
-## Thought: Cleaning processes
-I wonder if we might be able to establish the waveforms that occur as part of a clean-down process, enabling us to compare normalised waveforms across events?
+
+
+## Imputation of data
+
+```{r}
+library(caret)
+caret.input.df <- copy(input.df)
+preproc.vals <- caret::preProcess(input.df,method=c('medianImpute'))
+imputed.df <- stats::predict(preproc.vals,caret.input.df)
+```
+
+## Aggregation by Day
+
+```{r}
+imputed.df$cal.date <- as.Date(imputed.df$timestamp)
+imputed.day.dt <- unique(imputed.df[,`:=`(total.lost = sum(lost_quantity,na.rm=TRUE)),by=cal.date][,.(cal.date, total.lost)])
+plot(imputed.day.dt$cal.date,imputed.day.dt$total.lost)
+imputed.day.dt[,DoD.variation := total.lost-shift(total.lost)][,DoD.var.relative := DoD.variation/total.lost][abs(DoD.var.relative)>100,DoD.var.relative:=NA]
+plot(tail(imputed.day.dt$cal.date,n=-1),diff(imputed.day.dt$total.lost))
+```
+
+A quick plot of total lost per day shows three anomalous periods: the aforementioned December period (highly elevated quantities from 23/11/2022 to 21/12/2022), but also recent late May (reduced quantities from 16/05/23 to 09/06/2023), and from mid-June (commencing 10/06). This raises a conundrum about what "normal" looks like, as for the last two months, the experiment site has been anomalous.
+
+Given the brief, we interpret the ask as "What does normal look like?", so that we can establish a context to justify claims of non-normality.
+
+## Subset of Data to Evaluate
+```{r}
+subset.dt <- copy(imputed.day.dt)[!(cal.date>="2022-11-23" & cal.date<="2022-12-21"),][!(cal.date>="2023-05-16" & cal.date<="2023-06-09"),][!(cal.date>="2023-06-10"),]
+hist(subset.dt$total.lost)
+```
