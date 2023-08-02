@@ -1,6 +1,10 @@
 ---
 title: "Cleaning Data EDA"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
 ---
 
 ```{r, include=FALSE}
@@ -19,7 +23,9 @@ The purpose of this notebook is to front the analysis of sample data, observed f
 # Provided Data
 
 Time series sampled at 60 second intervals of:
+
 * Outflow rate, normalised. 
+* Outflow turbidity, normalised.
 
 # User Story, Problem Statement
 
@@ -39,13 +45,14 @@ turbidity.loss.coeff <- 1.0
 
 For discussion with stakeholders:
 
-* Did something occur in July toat affected the flow sensor?
+* Did something occur in July that affected the flow sensor?
 * SImilarly, we have dramatically more missing flow data than loss data. I would query why.
 
 # Data Loading
 ```{r}
 in.fn <- 'Data/interview_data.csv'
-source('R_Code/01_DataReading.R')
+input.df <- fread(in.fn)
+
 ```
 
 # Data Quality
@@ -90,7 +97,7 @@ hist(input.df$normalised_losses, breaks=20)
 plot(seq(20),log10(hist(input.df$normalised_losses, breaks=20,plot=FALSE)$counts))
 ```
 
-As expected, the vast majority of normalised loss values fall around 0.3. However, a disproportionately high 4% of loss values approach 100%, and do not conform to the expected distribution behaviour. Clearly, significant outliers to be evaluated.
+The vast majority of normalised loss values fall around 0.3. However, a disproportionately high 4% of loss values approach 100%, and do not conform to the expected distribution behaviour. Clearly, significant outliers to be evaluated.
 
 
 ## Flow quality
@@ -123,7 +130,7 @@ hist(input.df$normalised_flow)
 
 # There's something in the integral quality to be considered, i.e., the product of loss * flow, as high loss at minimal flow has small absolute value.
 hist(log10(input.df$normalised_losses*input.df$normalised_flow))
-input.df$normalised_quantity <- input.df$normalised_losses*input.df$normalised_flow
+input.df$normalised_quantity <- input.df$normalised_losses*input.df$normalised_flow*turbidity.loss.coeff
 input.df$lost_quantity <- input.df$normalised_quantity*input.df$time.delta
 # input.df[,loss_group:=fifelse(log10(normalised_quantity)>-3,2,1)]
 # table(input.df$loss_group)
@@ -247,19 +254,7 @@ As mentioned previously, in order to quantify the amount of product lost, we mus
 * Nov/Dec loss anomaly. Many options, including omitting the months outright, handling with indicator variables, or a separate model. For the MVP process, we will omit the Nov/Dec data in favour of a general time-invariant solution.
 * Missing loss/flow measurements. Imputation should be sufficient. 
 
-Given the current paucity of features, imputation with K-means is unlikely to be much improvement over linear interpolation, or median imputation. 
-
-```{r}
-
-# ts.plt <- ggplot(head(input.df,n=3000),aes(x=timestamp))+
-#   geom_line(aes(y=normalised_flow,color="flow"))+
-#   geom_line(aes(y=normalised_losses,color="loss"))+
-#   geom_line(aes(y=normalised_quantity,color="quantity"))
-# ts.plt
-
-```
-
-
+Given the current paucity of features, imputation with K-means is unlikely to be much improvement over linear interpolation, or median imputation. User familiarity is with the `caret` package for imputation.
 
 ## Imputation of data
 
@@ -289,3 +284,53 @@ Given the brief, we interpret the ask as "What does normal look like?", so that 
 subset.dt <- copy(imputed.day.dt)[!(cal.date>="2022-11-23" & cal.date<="2022-12-21"),][!(cal.date>="2023-05-16" & cal.date<="2023-06-09"),][!(cal.date>="2023-06-10"),]
 hist(subset.dt$total.lost)
 ```
+
+## Distribution of Total Daily Loss
+
+```{r}
+shapiro.test(subset.dt$total.lost)
+ks.test(subset.dt$total.lost,'pnorm')
+
+paste0('Median: ',median(subset.dt$total.lost))
+paste0('MAD: ',mad(subset.dt$total.lost))
+```
+Verifying with both Shapiro-Wilks and Kolmogorov-Smirnoff, the total daily losses do not quite follow a normal distribution. In order to answer the business question, we still require an estimation of the bounds of routine; to maintain statistical robustness, as an MVP solution I propose we use the sample median and median absolute deviation (MAD) to establish Red/Amber/Green traffic-light criteria, where Green represents within 1 MAD of the median (72% of the subset data), Amber represents within 2 MAD of the median (95% of the subset data), and Red is greater than 2 MAD.
+
+Numerically, this looks like the following hierarchy:
+
+* Total losses between 39.5 and 54.8 units: Green.
+* Total losses between 31.9 and 62.4 units: Amber.
+* Otherwise, losses outside typical behaviour: Red.
+
+# Application of Solution
+
+MVP 1 is a straightforward comparison of total loss in a day to the defined RAG thresholds, as proscribed in the below function `fn_lossRag()`:
+```{r}
+fn_lossRag <- function(total.day.loss=NULL,dist.median = 47.14, dist.mad = 7.62){
+  ## Function to validate whether a day's losses are within usual parameters.
+  # distribution parameters can be passed as an argument
+  
+  ## INPUT:
+  # total.day.loss - Numeric value of total units of product estimated lost within a day/24 hour period.
+  
+  ## OUTPUT:
+  # RAG.value - Text string of 'Green', 'Amber', or 'Red' depending on hardcoded bounds.
+  
+  RAG.value <- switch(min(ceiling( abs(total.day.loss-dist.median)/dist.mad),3),'GREEN','AMBER','RED')
+  RAG.value
+}
+
+```
+
+```{r}
+full.daily.RAG <- do.call('rbind',lapply(imputed.day.dt$total.lost,fn_lossRag))
+table(full.daily.RAG)
+```
+
+It should be noted that as coded, the MVP solution assumes that the system behaviour is at a steady state; given the recent values it may not be, and the reference distribution values updated accordingly. The approach would be inappropriate in the presence of incomplete, non-imputable data.
+
+Additionally, although the majority of product loss appears to occur within the first 12 hours of a given day, it should be noted that this approach implicitly infers a workflow wherein the comparison is made at the end of the day; for business reasons it may be more practicable to have an indicator available closer to COB times.
+
+## Further development of solution
+
+An extension of the above method would be to robustly model the trajectory of loss accumulation as a function of time for each day within the sample data. This would allow extrapolation from measurements through only part of the day and estimate the total at end of day, before losses actualised. This approach would solve the business requirement to inform next day activity.
